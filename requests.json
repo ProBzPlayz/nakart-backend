@@ -1,0 +1,66 @@
+[
+  {
+    "id": "mldjdhik",
+    "name": "꧁༺ඞB̸U̸R̸H̸A̸N̸U̸D̸D̸I̸N̸ඞ༻꧂",
+    "email": "burhanuddinz2021@gmail.com",
+    "phone": "+971 12 345 6789",
+    "service": "",
+    "budget": "Under AED75",
+    "message": "burhanuddin zakiuddin.",
+    "createdAt": "2026-02-08T09:24:01.388Z"
+  },
+  {
+    "id": "mlc8z2lg",
+    "name": "test user",
+    "email": "burhanuddinz2021@gmail.com",
+    "phone": "+971 12 345 6789",
+    "service": "",
+    "budget": "$1,500–$5,000",
+    "message": "make me a very nice project pls 67.",
+    "createdAt": "2026-02-07T11:45:06.531Z",
+    "replies": [
+      {
+        "by": "burhanuddin101122@gmail.com",
+        "at": "2026-02-07T11:45:51.169Z",
+        "subject": "Re: Your request to NakArt Designs",
+        "text": "Okay."
+      }
+    ]
+  },
+  {
+    "id": "mlavaoqs",
+    "name": "nafisa",
+    "email": "nafisazakiuddin52@gmail.com",
+    "phone": "+971545801864",
+    "service": "Posters & Print",
+    "budget": "$200–$500",
+    "message": "send more info on this and in the budget as mentioned",
+    "createdAt": "2026-02-06T12:34:27.652Z",
+    "replies": [
+      {
+        "by": "burhanuddin101122@gmail.com",
+        "at": "2026-02-06T12:36:22.814Z",
+        "subject": "Re: Your request to NakArt Designs",
+        "text": "okay."
+      }
+    ]
+  },
+  {
+    "id": "mlav9ma7",
+    "name": "nafisa",
+    "email": "nafisazakiuddin@gmail.com",
+    "phone": "+971545801864",
+    "service": "Posters & Print",
+    "budget": "$200–$500",
+    "message": "send info more on this budget range . your ideas and plan",
+    "createdAt": "2026-02-06T12:33:37.807Z",
+    "replies": [
+      {
+        "by": "burhanuddin101122@gmail.com",
+        "at": "2026-02-06T12:35:55.166Z",
+        "subject": "Re: Your request to NakArt Designs",
+        "text": "okay."
+      }
+    ]
+  }
+]
