@@ -32,12 +32,25 @@ app.use(helmet())
 // Parse cookies (to read authentication cookie)
 app.use(cookieParser())
 
-// CORS: when using cookie-based auth we must allow credentials
+// CORS: allow specific origins for production
+const allowedOrigins = [
+  'https://www.nakartdesigns.store',
+  'https://nakartdesigns.store'
+];
+
 app.use(cors({
-  origin: FRONTEND_ORIGIN,
-  methods: ['GET','POST','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
-  credentials: true
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }))
 
 app.use(bodyParser.json({ limit: '20mb' }))
