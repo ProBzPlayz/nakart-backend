@@ -479,8 +479,8 @@ app.post('/api/projects', requireAdminMiddleware, (req, res) => {
   }
 })
 
-// Protected: get projects from backend (for cross-device sync on load)
-app.get('/api/projects', requireAdminMiddleware, (req, res) => {
+// PUBLIC: get projects from backend (for cross-device sync - all pages need this)
+app.get('/api/projects', (req, res) => {
   try {
     if (!fs.existsSync(EXPORT_FILE)) return res.json([])
     const raw = fs.readFileSync(EXPORT_FILE, 'utf8')
