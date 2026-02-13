@@ -466,6 +466,7 @@ app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
 })
 
 // Protected: export projects to server file (backup)
+// Protected: save projects to backend (for cross-device sync)
 app.post('/api/projects', requireAdminMiddleware, (req, res) => {
   try {
     const data = req.body
@@ -475,6 +476,19 @@ app.post('/api/projects', requireAdminMiddleware, (req, res) => {
   } catch (e) {
     console.error('Error saving projects', e)
     return res.status(500).json({ ok:false, error:'Save failed' })
+  }
+})
+
+// Protected: get projects from backend (for cross-device sync on load)
+app.get('/api/projects', requireAdminMiddleware, (req, res) => {
+  try {
+    if (!fs.existsSync(EXPORT_FILE)) return res.json([])
+    const raw = fs.readFileSync(EXPORT_FILE, 'utf8')
+    const data = JSON.parse(raw || '[]')
+    return res.json(Array.isArray(data) ? data : [])
+  } catch (e) {
+    console.error('Error reading projects', e)
+    return res.json([])
   }
 })
 
