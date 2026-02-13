@@ -365,31 +365,39 @@ app.post('/api/requests', async (req, res) => {
       const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER
       if (adminEmail) {
         const html = adminHtmlEmail(obj)
-        await transporter.sendMail({
+        const mailOptions = {
           from: process.env.FROM_EMAIL || adminEmail,
           to: adminEmail,
           subject: `✉️ New request from ${name} — ${service || 'General'}`,
           html
-        })
+        }
+        console.log('\n[ADMIN EMAIL] Sending to:', adminEmail, 'FROM:', mailOptions.from)
+        const info = await transporter.sendMail(mailOptions)
+        console.log('[ADMIN EMAIL] ✓ Sent:', info.messageId || info.response)
       } else {
         console.warn('Admin email not configured; skipping admin notification')
       }
     } catch (e) {
-      console.warn('Failed to send admin email', e && e.message ? e.message : e)
+      console.error('[ADMIN EMAIL FAILED] Error:', e.message || e)
+      console.error('[ADMIN EMAIL FAILED] Full error:', e)
     }
 
     // optional client confirmation
     if (String(process.env.SEND_USER_CONFIRMATION || 'false') === 'true') {
       try {
         const html = confirmationHtmlEmail({ name, service, message })
-        await transporter.sendMail({
+        const mailOptions = {
           from: process.env.FROM_EMAIL || (process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER),
           to: email,
           subject: 'Thanks — I received your request',
           html
-        })
+        }
+        console.log('\n[CLIENT CONFIRMATION] Sending to:', email, 'FROM:', mailOptions.from)
+        const info = await transporter.sendMail(mailOptions)
+        console.log('[CLIENT CONFIRMATION] ✓ Sent:', info.messageId || info.response)
       } catch (e) {
-        console.warn('Failed to send confirmation to user:', e && e.message ? e.message : e)
+        console.error('[CLIENT CONFIRMATION FAILED] Error:', e.message || e)
+        console.error('[CLIENT CONFIRMATION FAILED] Full error:', e)
       }
     }
 
@@ -425,6 +433,20 @@ app.get('/api/requests/:id', requireAdminMiddleware, (req, res) => {
   }
 })
 
+// Protected: delete a request
+app.delete('/api/requests/:id', requireAdminMiddleware, (req, res) => {
+  try {
+    const id = req.params.id
+    const list = readRequestsFile()
+    const filtered = list.filter(r => String(r.id) !== String(id))
+    writeRequestsFile(filtered)
+    return res.json({ ok:true })
+  } catch (e) {
+    console.error('DELETE /api/requests/:id error', e)
+    return res.status(500).json({ ok:false, error:'Failed to delete' })
+  }
+})
+
 // Protected: respond to a request (send email reply)
 app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
   try {
@@ -438,12 +460,16 @@ app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
     const html = replyHtmlEmail({ adminName: (req.admin && req.admin.email) ? req.admin.email : 'NakArt', replyText: reply, originalRequest: original })
 
     try {
-      const info = await transporter.sendMail({
+      const mailOptions = {
         from: process.env.FROM_EMAIL || (process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER),
         to,
         subject,
         html
-      })
+      }
+      console.log('\n[ADMIN REPLY] Sending to:', to, 'FROM:', mailOptions.from)
+      const info = await transporter.sendMail(mailOptions)
+      console.log('[ADMIN REPLY] ✓ Sent:', info.messageId || info.response)
+      
       // record reply into requests.json
       try {
         const idx = list.findIndex(r => String(r.id) === String(id))
@@ -451,13 +477,15 @@ app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
           list[idx].replies = list[idx].replies || []
           list[idx].replies.push({ by: req.admin?.email || 'admin', at: new Date().toISOString(), subject, text: reply })
           writeRequestsFile(list)
+          console.log('[ADMIN REPLY] ✓ Recorded in file')
         }
-      } catch (e) { console.warn('Failed to record reply', e) }
+      } catch (e) { console.error('Failed to record reply', e) }
 
       return res.json({ ok:true })
     } catch (e) {
-      console.error('Failed to send reply', e && e.message ? e.message : e)
-      return res.status(500).json({ ok:false, error:'Failed to send reply' })
+      console.error('[ADMIN REPLY FAILED] Error:', e.message || e)
+      console.error('[ADMIN REPLY FAILED] Full error:', e)
+      return res.status(500).json({ ok:false, error:'Failed to send reply: ' + (e.message || 'Unknown error') })
     }
   } catch (e) {
     console.error('respond-request error', e)
