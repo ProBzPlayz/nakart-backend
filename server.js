@@ -32,7 +32,7 @@ app.use(helmet())
 // Parse cookies (to read authentication cookie)
 app.use(cookieParser())
 
-// CORS: allow specific origins for production
+// CORS: allow specific origins for production with credentials support
 const allowedOrigins = [
   'https://www.nakartdesigns.store',
   'https://nakartdesigns.store'
@@ -43,13 +43,14 @@ app.use(cors({
     // allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('CORS not allowed'));
+      callback(new Error('Not allowed by CORS'));
     }
   },
-  methods: ['GET', 'POST', 'OPTIONS'],
+  credentials: true, // 🔥 CRITICAL: allow cookies/auth headers
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }))
 
