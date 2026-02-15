@@ -26,33 +26,35 @@ const JWT_EXPIRES = process.env.JWT_EXPIRES || '8h'
 const COOKIE_NAME = 'nakart_admin_token'
 
 /* --------------------- Security middleware --------------------- */
-// Helmet sets a bunch of safe headers
 app.use(helmet())
-
-// Parse cookies (to read authentication cookie)
 app.use(cookieParser())
 
-// CORS: allow specific origins for production with credentials support
+// CORS: only allow the configured frontend origin(s)
 const allowedOrigins = [
+  FRONTEND_ORIGIN,
+  (process.env.ADDITIONAL_ALLOWED_ORIGIN || '').replace(/\/$/, ''), // optional extra origin
   'https://www.nakartdesigns.store',
   'https://nakartdesigns.store'
-];
+].filter(Boolean)
 
 app.use(cors({
   origin: function (origin, callback) {
-    // allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    // allow non-browser requests (postman, curl) without origin
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.includes(origin)) return callback(null, true)
+    return callback(new Error('Not allowed by CORS'))
   },
-  credentials: true, // 🔥 CRITICAL: allow cookies/auth headers
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }))
+
+// ensure preflight handler responds with credentials header
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Credentials', 'true')
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '')
+  res.sendStatus(204)
+})
 
 app.use(bodyParser.json({ limit: '20mb' }))
 
@@ -77,30 +79,33 @@ let transporter
   const smtpPort = process.env.SMTP_PORT
   const smtpSecure = process.env.SMTP_SECURE
 
+  // Basic TLS fallback config if you explicitly set SKIP_TLS_VERIFY=true (dev only)
+  const tlsOpts = (String(process.env.SKIP_TLS_VERIFY || 'false') === 'true') ? { tls: { rejectUnauthorized: false } } : {}
+
   if (smtpUser && smtpPass) {
-    transporter = nodemailer.createTransport({
+    transporter = nodemailer.createTransport(Object.assign({
       host: smtpHost || 'smtp.gmail.com',
       port: Number(smtpPort) || 465,
       secure: (String(smtpSecure) === 'true') || true,
       auth: { user: smtpUser, pass: smtpPass }
-    })
+    }, tlsOpts))
     return
   }
 
   if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-    transporter = nodemailer.createTransport({
+    transporter = nodemailer.createTransport(Object.assign({
       service: 'gmail',
       auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-    })
+    }, tlsOpts))
     return
   }
 
-  // No-auth transport (best-effort; may be rejected by many providers)
-  transporter = nodemailer.createTransport({
+  // No-auth transport (best-effort; many providers will reject)
+  transporter = nodemailer.createTransport(Object.assign({
     host: smtpHost || 'smtp.gmail.com',
     port: Number(smtpPort) || 465,
     secure: true
-  })
+  }, tlsOpts))
 })()
 
 transporter.verify((err) => {
@@ -125,17 +130,36 @@ function readRequestsFile() {
   }
 }
 
+// safer write (atomic-ish) and used everywhere
 function writeRequestsFile(list) {
-  try { fs.writeFileSync(REQ_FILE, JSON.stringify(list || [], null, 2), 'utf8') } catch (e) { console.warn('writeRequestsFile err', e) }
+  try {
+    const tmp = `${REQ_FILE}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(list || [], null, 2), 'utf8')
+    fs.renameSync(tmp, REQ_FILE)
+  } catch (e) {
+    console.warn('writeRequestsFile err', e)
+  }
 }
 
+// Save request, but avoid duplicates (by id). This prevents retries creating duplicates.
 function saveRequestToFile(obj) {
-  const list = readRequestsFile()
-  list.unshift(obj)
-  writeRequestsFile(list)
+  try {
+    const list = readRequestsFile()
+    if (list.find(r => String(r.id) === String(obj.id))) {
+      // already exists -> replace with latest copy
+      const idx = list.findIndex(r => String(r.id) === String(obj.id))
+      list[idx] = obj
+      writeRequestsFile(list)
+      return
+    }
+    list.unshift(obj)
+    writeRequestsFile(list)
+  } catch (e) {
+    console.warn('saveRequestToFile err', e)
+  }
 }
 
-/* --------------------- Email templates (stylish text header) --------------------- */
+/* --------------------- Email templates (no attachment by default) --------------------- */
 const COLORS = {
   burgundy: process.env.BRAND_BURGUNDY || '#B02A37',
   plum: process.env.BRAND_PLUM || '#502C5A',
@@ -144,22 +168,22 @@ const COLORS = {
 }
 
 function headerBlock(title, subtitle) {
-  // Enhanced header with stylish NakArt Designs branding
   const logoUrl = process.env.LOGO_URL || ''
   const gradient = `linear-gradient(135deg, ${COLORS.plum} 0%, ${COLORS.burgundy} 100%)`
   const escapedTitle = safe(title)
   const escapedSubtitle = safe(subtitle || '')
-  
-  // Use logo if available, otherwise use stylish text-only design
-  const headerContent = logoUrl 
-    ? `<img src="${safe(logoUrl)}" alt="${escapedTitle}" style="height:48px; display:block; border-radius:8px; object-fit:contain" />`
-    : `<div style="font-family: 'Georgia', 'Garamond', serif; font-weight:700; font-size:24px; letter-spacing:1.2px; text-transform:uppercase; color:white; line-height:1.2">${escapedTitle}</div>`
-  
+  const headerContent = logoUrl
+    ? `<div style="display:flex;gap:12px;align-items:center;justify-content:center">
+         <img src="${safe(logoUrl)}" alt="${escapedTitle}" style="height:48px; display:block; border-radius:8px; object-fit:contain" />
+         <div style="font-family: 'Georgia','Garamond',serif;color:white;font-weight:700;font-size:22px;letter-spacing:0.6px">${escapedTitle}</div>
+       </div>`
+    : `<div style="font-family: 'Georgia', 'Garamond', serif; font-weight:700; font-size:22px; letter-spacing:1.2px; text-transform:uppercase; color:white; line-height:1.2">${escapedTitle}</div>`
+
   return `
-    <div style="background: ${gradient}; padding:28px 24px; color:white; text-align:center;">
-      <div style="max-width:600px; margin:0 auto;">
+    <div style="background: ${gradient}; padding:22px 18px; color:white; text-align:center;">
+      <div style="max-width:640px; margin:0 auto;">
         ${headerContent}
-        ${escapedSubtitle ? `<div style="font-size:14px; opacity:0.95; margin-top:10px; font-weight:500; letter-spacing:0.3px">${escapedSubtitle}</div>` : ''}
+        ${escapedSubtitle ? `<div style="font-size:13px; opacity:0.95; margin-top:8px; font-weight:500">${escapedSubtitle}</div>` : ''}
       </div>
     </div>
   `
@@ -167,10 +191,10 @@ function headerBlock(title, subtitle) {
 
 function wrapEmail(innerHtml, smallPrint='') {
   return `
-    <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial; background:${COLORS.canvas}; padding:20px;">
-      <div style="max-width:700px; margin:0 auto; background:#fff; border-radius:12px; overflow:hidden; border:1px solid #ddd; box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+    <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial; background:${COLORS.canvas}; padding:18px;">
+      <div style="max-width:700px; margin:0 auto; background:#fff; border-radius:12px; overflow:hidden; border:1px solid #eee; box-shadow:0 2px 10px rgba(0,0,0,0.05)">
         ${innerHtml}
-        <div style="padding:16px 20px; background:#fafbfc; border-top:1px solid #eee; color:#666; font-size:12px; text-align:center; line-height:1.4">${safe(smallPrint)}</div>
+        <div style="padding:14px 18px; background:#fafbfc; border-top:1px solid #eee; color:#666; font-size:12px; text-align:center; line-height:1.4">${safe(smallPrint)}</div>
       </div>
     </div>
   `
@@ -179,43 +203,28 @@ function wrapEmail(innerHtml, smallPrint='') {
 function adminHtmlEmail({ name, email, phone, service, budget, message, createdAt }) {
   const header = headerBlock('NakArt Designs', 'New project inquiry')
   const body = `
-    <div style="padding:24px;">
-      <div style="background:#f9f9f9; padding:16px; border-radius:8px; margin-bottom:20px;">
+    <div style="padding:20px;">
+      <div style="background:#fbfbfb;padding:12px;border-radius:8px;margin-bottom:18px">
         <table role="presentation" width="100%" style="border-collapse:collapse;">
-          <tr style="border-bottom:1px solid #e0e0e0;">
-            <td style="width:25%; color:#666; padding:8px 0; font-weight:600; font-size:13px">NAME</td>
-            <td style="font-weight:700; padding:8px 0; font-size:15px; color:#222">${safe(name)}</td>
-          </tr>
-          <tr style="border-bottom:1px solid #e0e0e0;">
-            <td style="color:#666; padding:8px 0; font-weight:600; font-size:13px">EMAIL</td>
-            <td style="font-weight:500; padding:8px 0; font-size:14px"><a href="mailto:${safe(email)}" style="color:${COLORS.burgundy}; text-decoration:none">${safe(email)}</a></td>
-          </tr>
-          <tr style="border-bottom:1px solid #e0e0e0;">
-            <td style="color:#666; padding:8px 0; font-weight:600; font-size:13px">PHONE</td>
-            <td style="font-weight:500; padding:8px 0; font-size:14px">${safe(phone || 'Not provided')}</td>
-          </tr>
-          <tr style="border-bottom:1px solid #e0e0e0;">
-            <td style="color:#666; padding:8px 0; font-weight:600; font-size:13px">SERVICE</td>
-            <td style="font-weight:500; padding:8px 0; font-size:14px">${safe(service || 'General inquiry')}</td>
-          </tr>
-          <tr>
-            <td style="color:#666; padding:8px 0; font-weight:600; font-size:13px">BUDGET</td>
-            <td style="font-weight:500; padding:8px 0; font-size:14px">${safe(budget || 'Not specified')}</td>
-          </tr>
+          <tr style="border-bottom:1px solid #e6e6e6"><td style="width:28%; color:#666; padding:8px 0;font-weight:700;font-size:13px">NAME</td><td style="padding:8px 0;font-weight:700">${safe(name)}</td></tr>
+          <tr style="border-bottom:1px solid #e6e6e6"><td style="color:#666; padding:8px 0;font-weight:700;font-size:13px">EMAIL</td><td style="padding:8px 0"><a href="mailto:${safe(email)}" style="color:${COLORS.burgundy};text-decoration:none">${safe(email)}</a></td></tr>
+          <tr style="border-bottom:1px solid #e6e6e6"><td style="color:#666; padding:8px 0;font-weight:700;font-size:13px">PHONE</td><td style="padding:8px 0">${safe(phone || 'Not provided')}</td></tr>
+          <tr style="border-bottom:1px solid #e6e6e6"><td style="color:#666; padding:8px 0;font-weight:700;font-size:13px">SERVICE</td><td style="padding:8px 0">${safe(service || 'General')}</td></tr>
+          <tr><td style="color:#666; padding:8px 0;font-weight:700;font-size:13px">BUDGET</td><td style="padding:8px 0">${safe(budget || '—')}</td></tr>
         </table>
       </div>
 
-      <div style="margin-bottom:16px;">
-        <div style="font-weight:700; color:${COLORS.navy}; margin-bottom:10px; font-size:14px; text-transform:uppercase; letter-spacing:0.5px">Message</div>
-        <div style="background:#f5f5f5; padding:14px; border-radius:8px; border-left:4px solid ${COLORS.burgundy}; white-space:pre-wrap; color:#333; font-size:14px; line-height:1.6">${safe(message)}</div>
+      <div style="margin-bottom:14px">
+        <div style="font-weight:700;color:${COLORS.navy};margin-bottom:8px;font-size:13px">Message</div>
+        <div style="background:#fff;padding:14px;border-radius:8px;border-left:4px solid ${COLORS.burgundy};white-space:pre-wrap;color:#222">${safe(message)}</div>
       </div>
 
-      <div style="margin-top:20px; display:flex; gap:10px; flex-wrap:wrap;">
-        <a href="mailto:${safe(email)}" style="display:inline-block;padding:11px 18px;border-radius:6px;background:${COLORS.burgundy};color:white;text-decoration:none;font-weight:700;font-size:14px">Reply to Client</a>
-        <a href="${safe(process.env.ADMIN_DASHBOARD_URL || (FRONTEND_ORIGIN + '/admin'))}" style="display:inline-block;padding:11px 18px;border-radius:6px;background:${COLORS.plum};color:white;text-decoration:none;font-weight:700;font-size:14px">Go to Admin Panel</a>
+      <div style="margin-top:16px;display:flex;gap:10px">
+        <a href="mailto:${safe(email)}" style="display:inline-block;padding:10px 14px;border-radius:8px;background:${COLORS.burgundy};color:#fff;text-decoration:none;font-weight:700">Reply to Client</a>
+        <a href="${safe(process.env.ADMIN_DASHBOARD_URL || (FRONTEND_ORIGIN + '/admin'))}" style="display:inline-block;padding:10px 14px;border-radius:8px;background:${COLORS.plum};color:#fff;text-decoration:none;font-weight:700">Open Admin Panel</a>
       </div>
 
-      <div style="margin-top:16px; padding-top:16px; border-top:1px solid #eee; color:#888; font-size:12px;">Received: <strong>${safe(createdAt)}</strong></div>
+      <div style="margin-top:20px;color:#888;font-size:12px">Received: <strong>${safe(createdAt)}</strong></div>
     </div>
   `
   const small = `NakArt Designs • ${process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER || ''}`
@@ -226,15 +235,11 @@ function confirmationHtmlEmail({ name, service, message }) {
   const header = headerBlock('NakArt Designs', 'We received your request')
   const body = `
     <div style="padding:18px">
-      <div style="font-size:15px; color:#222;">
-        <p style="margin:0 0 10px">Hi ${safe(name || 'there')},</p>
-        <p style="margin:0 0 12px; color:#444">Thanks for reaching out about <strong>${safe(service || 'your project')}</strong>. I’ll review this and reply within 48 hours on business days.</p>
-        <div style="background:#fbfbfb; padding:12px; border-radius:8px; white-space:pre-wrap; color:#333;">${safe(message)}</div>
-        <div style="margin-top:14px">
-          <a href="mailto:${safe(process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER)}" style="display:inline-block;padding:10px 14px;border-radius:8px;background:${COLORS.burgundy};color:white;text-decoration:none;font-weight:700">Contact NakArt</a>
-        </div>
-        <p style="margin-top:12px;color:#666;font-size:13px">We aim to reply within 48 hours (business days).</p>
-      </div>
+      <p style="margin:0 0 10px">Hi ${safe(name || 'there')},</p>
+      <p style="margin:0 0 12px;color:#444">Thanks for reaching out about <strong>${safe(service || 'your project')}</strong>. I’ll review and reply within 48 hours (business days).</p>
+      <div style="background:#fbfbfb;padding:12px;border-radius:8px;white-space:pre-wrap;color:#333">${safe(message)}</div>
+      <div style="margin-top:14px"><a href="mailto:${safe(process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER)}" style="display:inline-block;padding:10px 14px;border-radius:8px;background:${COLORS.burgundy};color:white;text-decoration:none;font-weight:700">Contact NakArt</a></div>
+      <p style="margin-top:12px;color:#666;font-size:13px">We aim to reply within 48 hours (business days).</p>
     </div>
   `
   const small = `NakArt Designs • ${process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER || ''}`
@@ -244,23 +249,18 @@ function confirmationHtmlEmail({ name, service, message }) {
 function replyHtmlEmail({ adminName, replyText, originalRequest }) {
   const header = headerBlock('NakArt Designs', 'Response to your inquiry')
   const body = `
-    <div style="padding:24px; color:#222;">
-      <p style="margin:0 0 14px; font-size:16px; line-height:1.6">Hi <strong>${safe(originalRequest.name || 'there')}</strong>,</p>
-      
-      <div style="margin:14px 0 24px; line-height:1.7; font-size:15px; color:#333;">${safe(replyText).replace(/\n/g, '<br/>')}</div>
+    <div style="padding:20px;color:#222">
+      <p style="margin:0 0 12px;font-size:15px">Hi <strong>${safe(originalRequest.name || 'there')}</strong>,</p>
+      <div style="margin:12px 0 20px;font-size:15px;line-height:1.6">${safe(replyText).replace(/\n/g,'<br/>')}</div>
 
-      <div style="margin-top:24px; padding-top:20px; border-top:2px solid #e0e0e0;">
-        <div style="color:#666; font-size:13px; margin-bottom:8px;">Best regards,</div>
-        <div style="font-weight:700; color:${COLORS.burgundy}; font-size:15px; margin-bottom:4px">${safe(adminName)}</div>
-        <div style="font-size:14px;">
-          <a href="mailto:${safe(process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER)}" style="color:${COLORS.navy}; text-decoration:none; font-weight:500">${safe(process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER)}</a>
-        </div>
-        <div style="font-size:13px; color:#888; margin-top:6px;">NakArt Designs • Creative Studio</div>
+      <div style="margin-top:10px;padding-top:12px;border-top:1px solid #e6e6e6">
+        <div style="font-weight:700;color:${COLORS.burgundy};font-size:15px">${safe(adminName)}</div>
+        <div style="font-size:13px;color:#666;"><a href="mailto:${safe(process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER)}" style="color:${COLORS.navy};text-decoration:none">${safe(process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER)}</a></div>
       </div>
 
-      <div style="margin-top:24px; padding:16px; background:#f9f9f9; border-radius:8px;">
-        <div style="font-size:12px; color:#666; margin-bottom:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px">Your original message</div>
-        <div style="background:#ffffff; padding:12px; border-radius:6px; border-left:4px solid ${COLORS.plum}; white-space:pre-wrap; color:#444; font-size:13px; line-height:1.6;">${safe(originalRequest.message || '')}</div>
+      <div style="margin-top:18px;background:#f9f9f9;padding:14px;border-radius:8px">
+        <div style="font-size:12px;color:#666;margin-bottom:8px;font-weight:700;text-transform:uppercase">Your original message</div>
+        <div style="white-space:pre-wrap;color:#444">${safe(originalRequest.message || '')}</div>
       </div>
     </div>
   `
@@ -280,30 +280,23 @@ function validateRequestPayload(payload) {
 
 async function checkAdminCredentials(email, password) {
   const adminEmail = process.env.ADMIN_EMAIL
-  const adminHash = process.env.ADMIN_PASSWORD_HASH // bcrypt hash
-  const adminPlain = process.env.ADMIN_PASSWORD // plaintext fallback
-
-  if (!adminEmail) return { ok:false, error: 'Admin email not configured' }
+  const adminHash = process.env.ADMIN_PASSWORD_HASH
+  const adminPlain = process.env.ADMIN_PASSWORD
+  if (!adminEmail) return { ok:false, error:'Admin email not configured' }
   if (String(email).toLowerCase() !== String(adminEmail).toLowerCase()) return { ok:false, error:'Invalid email' }
-
   if (adminHash) {
     try {
       const match = await bcrypt.compare(String(password || ''), adminHash)
       return match ? { ok:true } : { ok:false, error:'Invalid password' }
-    } catch (e) {
-      return { ok:false, error:'Hash compare failed' }
-    }
+    } catch(e){ return { ok:false, error:'Hash compare failed' } }
   }
-
   if (adminPlain) {
     return String(password) === String(adminPlain) ? { ok:true } : { ok:false, error:'Invalid password' }
   }
-
   return { ok:false, error:'No admin password configured on server' }
 }
 
 function requireAdminMiddleware(req, res, next) {
-  // Accept Authorization Bearer or cookie
   const header = req.headers.authorization
   const cookieToken = req.cookies && req.cookies[COOKIE_NAME]
   const token = (header && header.startsWith('Bearer ') ? header.split(' ')[1] : null) || cookieToken
@@ -321,15 +314,13 @@ function requireAdminMiddleware(req, res, next) {
 
 /* --------------------- Routes --------------------- */
 
-// Admin login - sets HttpOnly cookie (preferred)
+// Admin login (sets HttpOnly cookie, returns token as well)
 app.post('/api/admin/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {}
     if (!email || !password) return res.status(400).json({ ok:false, error:'Missing credentials' })
-
     const cred = await checkAdminCredentials(email, password)
     if (!cred.ok) return res.status(401).json({ ok:false, error: cred.error || 'Invalid credentials' })
-
     const token = jwt.sign({ role: 'admin', email: process.env.ADMIN_EMAIL }, JWT_SECRET, { expiresIn: JWT_EXPIRES })
     const cookieOpts = {
       httpOnly: true,
@@ -338,7 +329,6 @@ app.post('/api/admin/login', loginLimiter, async (req, res) => {
       maxAge: 1000 * 60 * 60 * 24 * 7
     }
     res.cookie(COOKIE_NAME, token, cookieOpts)
-    // return token in body for legacy clients (optional)
     return res.json({ ok:true, token })
   } catch (e) {
     console.error('/api/admin/login error', e)
@@ -351,16 +341,15 @@ app.post('/api/requests', async (req, res) => {
   try {
     const err = validateRequestPayload(req.body)
     if (err) return res.status(400).json({ ok:false, error: err })
-
     const { name, email, phone, service, budget, message } = req.body
     const createdAt = new Date().toISOString()
     const id = Date.now().toString(36)
     const obj = { id, name, email, phone, service, budget, message, createdAt }
 
-    // persist locally
+    // persist locally (safe dedupe)
     saveRequestToFile(obj)
 
-    // Build admin email HTML (no file attachments)
+    // Admin email (no file attachments by default)
     try {
       const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER
       if (adminEmail) {
@@ -371,18 +360,17 @@ app.post('/api/requests', async (req, res) => {
           subject: `✉️ New request from ${name} — ${service || 'General'}`,
           html
         }
-        console.log('\n[ADMIN EMAIL] Sending to:', adminEmail, 'FROM:', mailOptions.from)
+        console.log('[ADMIN EMAIL] send attempt ->', adminEmail)
         const info = await transporter.sendMail(mailOptions)
-        console.log('[ADMIN EMAIL] ✓ Sent:', info.messageId || info.response)
+        console.log('[ADMIN EMAIL] Sent:', info && (info.messageId || info.response) || 'ok')
       } else {
         console.warn('Admin email not configured; skipping admin notification')
       }
     } catch (e) {
-      console.error('[ADMIN EMAIL FAILED] Error:', e.message || e)
-      console.error('[ADMIN EMAIL FAILED] Full error:', e)
+      console.error('[ADMIN EMAIL FAILED]', e && e.message || e)
     }
 
-    // optional client confirmation
+    // optional user confirmation
     if (String(process.env.SEND_USER_CONFIRMATION || 'false') === 'true') {
       try {
         const html = confirmationHtmlEmail({ name, service, message })
@@ -392,12 +380,11 @@ app.post('/api/requests', async (req, res) => {
           subject: 'Thanks — I received your request',
           html
         }
-        console.log('\n[CLIENT CONFIRMATION] Sending to:', email, 'FROM:', mailOptions.from)
+        console.log('[CONFIRMATION] sending to', email)
         const info = await transporter.sendMail(mailOptions)
-        console.log('[CLIENT CONFIRMATION] ✓ Sent:', info.messageId || info.response)
+        console.log('[CONFIRMATION] Sent:', info && (info.messageId || info.response) || 'ok')
       } catch (e) {
-        console.error('[CLIENT CONFIRMATION FAILED] Error:', e.message || e)
-        console.error('[CLIENT CONFIRMATION FAILED] Full error:', e)
+        console.error('[CONFIRMATION FAILED]', e && e.message || e)
       }
     }
 
@@ -452,11 +439,9 @@ app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
   try {
     const { id, to, reply, replySubject } = req.body || {}
     if (!to || !reply) return res.status(400).json({ ok:false, error:'Missing to or reply' })
-
     const subject = replySubject || 'Re: Your request to NakArt Designs'
     const list = readRequestsFile()
     const original = list.find(r => String(r.id) === String(id)) || { name: '' }
-
     const html = replyHtmlEmail({ adminName: (req.admin && req.admin.email) ? req.admin.email : 'NakArt', replyText: reply, originalRequest: original })
 
     try {
@@ -466,26 +451,24 @@ app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
         subject,
         html
       }
-      console.log('\n[ADMIN REPLY] Sending to:', to, 'FROM:', mailOptions.from)
+      console.log('[ADMIN REPLY] sending to', to)
       const info = await transporter.sendMail(mailOptions)
-      console.log('[ADMIN REPLY] ✓ Sent:', info.messageId || info.response)
-      
-      // record reply into requests.json
+      console.log('[ADMIN REPLY] Sent:', info && (info.messageId || info.response) || 'ok')
+
+      // record reply
       try {
         const idx = list.findIndex(r => String(r.id) === String(id))
         if (idx >= 0) {
           list[idx].replies = list[idx].replies || []
           list[idx].replies.push({ by: req.admin?.email || 'admin', at: new Date().toISOString(), subject, text: reply })
           writeRequestsFile(list)
-          console.log('[ADMIN REPLY] ✓ Recorded in file')
         }
-      } catch (e) { console.error('Failed to record reply', e) }
+      } catch (e) { console.warn('Failed to record reply', e) }
 
       return res.json({ ok:true })
     } catch (e) {
-      console.error('[ADMIN REPLY FAILED] Error:', e.message || e)
-      console.error('[ADMIN REPLY FAILED] Full error:', e)
-      return res.status(500).json({ ok:false, error:'Failed to send reply: ' + (e.message || 'Unknown error') })
+      console.error('[ADMIN REPLY FAILED]', e && e.message || e)
+      return res.status(500).json({ ok:false, error:'Failed to send reply: ' + (e && e.message ? e.message : '') })
     }
   } catch (e) {
     console.error('respond-request error', e)
@@ -493,8 +476,7 @@ app.post('/api/respond-request', requireAdminMiddleware, async (req, res) => {
   }
 })
 
-// Protected: export projects to server file (backup)
-// Protected: save projects to backend (for cross-device sync)
+// Projects backup and sync endpoints
 app.post('/api/projects', requireAdminMiddleware, (req, res) => {
   try {
     const data = req.body
@@ -507,7 +489,6 @@ app.post('/api/projects', requireAdminMiddleware, (req, res) => {
   }
 })
 
-// PUBLIC: get projects from backend (for cross-device sync - all pages need this)
 app.get('/api/projects', (req, res) => {
   try {
     if (!fs.existsSync(EXPORT_FILE)) return res.json([])
@@ -520,7 +501,7 @@ app.get('/api/projects', (req, res) => {
   }
 })
 
-// Protected: cloudinary sign for signed uploads
+// Cloudinary sign (protected)
 app.post('/api/cloudinary-sign', requireAdminMiddleware, (req, res) => {
   try {
     const { filename = '', folder = '' } = req.body || {}
@@ -539,7 +520,7 @@ app.post('/api/cloudinary-sign', requireAdminMiddleware, (req, res) => {
   }
 })
 
-// Test email (developer) — helpful for checking templates
+// Test email endpoint
 app.post('/api/send-test-email', async (req, res) => {
   try {
     const { toAdmin=true, toClientEmail=null } = req.body || {}
@@ -569,7 +550,6 @@ app.post('/api/send-test-email', async (req, res) => {
   }
 })
 
-// Public ping
 app.get('/ping', (req, res) => res.send('pong'))
 
 /* --------------------- Start server --------------------- */
